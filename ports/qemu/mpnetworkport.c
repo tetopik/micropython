@@ -3,7 +3,7 @@
  *
  * The MIT License (MIT)
  *
- * Copyright (c) 2016 Linaro Limited
+ * Copyright (c) 2026 Ibrahim Abdelkader <iabdalkader@openmv.io>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -23,19 +23,38 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include <zephyr/kernel.h>
-#include "zephyr_getchar.h"
 
-int real_main(void);
-int mp_console_init(void);
+#include "py/mphal.h"
+#include "shared/runtime/softtimer.h"
 
-int main(void) {
-    #ifdef CONFIG_CONSOLE_SUBSYS
-    mp_console_init();
-    #else
-    zephyr_getchar_init();
-    #endif
-    real_main();
+#if MICROPY_PY_LWIP
 
-    return 0;
+#include "lwip/timeouts.h"
+#include "eth.h"
+
+// Poll lwIP (and the polled NIC RX) at this rate, in milliseconds.
+#define LWIP_TICK_RATE_MS (8)
+
+// Soft timer for running lwIP in the background.
+static soft_timer_entry_t network_timer;
+
+u32_t sys_now(void) {
+    return mp_hal_ticks_ms();
 }
+
+// This is called by soft_timer and executes at PendSV level.
+static void network_timer_callback(soft_timer_entry_t *self) {
+    (void)self;
+    // Drain the NIC RX FIFO (there is no RX interrupt on this port) and run the
+    // lwIP internal updates.
+    eth_poll();
+    sys_check_timeouts();
+}
+
+void mod_network_lwip_init(void) {
+    soft_timer_remove(&network_timer);
+    soft_timer_static_init(&network_timer, SOFT_TIMER_MODE_PERIODIC, LWIP_TICK_RATE_MS, network_timer_callback);
+    soft_timer_reinsert(&network_timer, LWIP_TICK_RATE_MS);
+}
+
+#endif // MICROPY_PY_LWIP
